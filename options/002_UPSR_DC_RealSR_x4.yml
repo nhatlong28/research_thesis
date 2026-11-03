@@ -11,14 +11,14 @@ queue_size: 160
 dc:
   enabled: true
   rho: 1.0
-  kernel_path: ../../benchmark/testsets/BSDS10/gaussian_kernel.npy
+  kernel_path: benchmark/testsets/BSDS10/gaussian_kernel.npy
 
 # dataset and data loader settings
 datasets:
   val_1:
     name: BSD10_DC
     type: SingleImageDataset
-    dataroot_lq: inputs
+    dataroot_lq: benchmark/testsets/BSDS10/lq
     io_backend:
       type: disk
   
