@@ -1,0 +1,9 @@
+papers/
+datasets/
+diffpir_method/
+.venv/
+__pycache__/
+generate_synthetic.py
+PLAN.md
+README_DC.md
+

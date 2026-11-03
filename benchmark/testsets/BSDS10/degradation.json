@@ -1,0 +1,7 @@
+{
+  "scale": 4,
+  "kernel_size": 9,
+  "kernel_sigma": 1.7320508075688772,
+  "sigma_n": 0.025,
+  "seed": 1234
+}
