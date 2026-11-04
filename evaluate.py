@@ -1,4 +1,4 @@
-"""Evaluate SR folders with PSNR, SSIM, LPIPS-VGG and CLIP-IQA."""
+"""Evaluate SR folders with PSNR, SSIM, LPIPS-VGG and TorchMetrics/PyIQA CLIP-IQA."""
 
 import argparse
 import csv
@@ -7,6 +7,7 @@ from statistics import fmean
 
 import numpy as np
 import matplotlib.pyplot as plt
+import pyiqa
 from PIL import Image
 import torch
 from torchmetrics.image import (
@@ -17,7 +18,7 @@ from torchmetrics.image import (
 from torchmetrics.multimodal import CLIPImageQualityAssessment
 
 
-SCORES = ("psnr_rgb", "ssim_rgb", "lpips_vgg", "clip_iqa")
+SCORES = ("psnr_rgb", "ssim_rgb", "lpips_vgg", "clip_iqa", "clipiqa")
 
 
 def read_rgb(path, device):
@@ -88,6 +89,7 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
         "ssim_rgb": StructuralSimilarityIndexMeasure(data_range=1.0),
         "lpips_vgg": LearnedPerceptualImagePatchSimilarity(net_type="vgg", normalize=True),
         "clip_iqa": CLIPImageQualityAssessment(data_range=1.0, prompts=("quality",)),
+        "clipiqa": pyiqa.create_metric("clipiqa", device=device),
     }
     for metric in metrics.values():
         metric.to(device).eval()
@@ -120,8 +122,9 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
 
                 row = {"method": method, "image": sr_path.name}
                 for name, metric in metrics.items():
-                    metric.reset()  # Independent scores for each image.
-                    score = metric(sr) if name == "clip_iqa" else metric(sr_ref, gt_ref)
+                    if name != "clipiqa":
+                        metric.reset()  # Independent TorchMetrics scores for each image.
+                    score = metric(sr) if name in ("clip_iqa", "clipiqa") else metric(sr_ref, gt_ref)
                     row[name] = score.item()
                 rows.append(row)
                 print(f"{method}/{sr_path.name}: " + ", ".join(
@@ -140,7 +143,7 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
     write_csv(output_dir / "summary.csv", summary)
     visualize(comparisons, lq_dir or gt_dir.parent / "lq", gt_dir,
               output_dir / "visualizations", runs)
-    print("\nMethod | N | PSNR up | SSIM up | LPIPS down | CLIP-IQA up")
+    print("\nMethod | N | PSNR up | SSIM up | LPIPS down | CLIP-IQA (TorchMetrics) up | CLIPIQA (PyIQA) up")
     for row in summary:
         print(f"{row['method']} | {row['num_images']} | " + " | ".join(
             f"{row[name]:.6f}" for name in SCORES
