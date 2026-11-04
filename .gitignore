@@ -3,7 +3,9 @@ datasets/
 diffpir_method/
 .venv/
 __pycache__/
+lamb1.0_zeta0.1_original
 generate_synthetic.py
+gaussian_diffusion_old.py
 PLAN.md
 README_DC.md
 

@@ -1,4 +1,4 @@
-"""Evaluate SR folders with PSNR, SSIM, LPIPS-VGG and TorchMetrics/PyIQA CLIP-IQA."""
+"""Evaluate SR folders with PSNR, SSIM, MS-SSIM, LPIPS-VGG and TorchMetrics/PyIQA CLIP-IQA."""
 
 import argparse
 import csv
@@ -12,13 +12,15 @@ from PIL import Image
 import torch
 from torchmetrics.image import (
     LearnedPerceptualImagePatchSimilarity,
+    MultiScaleStructuralSimilarityIndexMeasure,
     PeakSignalNoiseRatio,
     StructuralSimilarityIndexMeasure,
 )
 from torchmetrics.multimodal import CLIPImageQualityAssessment
 
 
-SCORES = ("psnr_rgb", "ssim_rgb", "lpips_vgg", "clip_iqa", "clipiqa")
+SCORES = ("psnr_rgb", "ssim_rgb", "msssim_rgb", "lpips_vgg", "clip_iqa", "clipiqa")
+MS_SSIM_MIN_SIZE = 176  # TorchMetrics default: five scales and an 11-pixel kernel.
 
 
 def read_rgb(path, device):
@@ -87,6 +89,7 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
     metrics = {
         "psnr_rgb": PeakSignalNoiseRatio(data_range=1.0),
         "ssim_rgb": StructuralSimilarityIndexMeasure(data_range=1.0),
+        "msssim_rgb": MultiScaleStructuralSimilarityIndexMeasure(data_range=1.0),
         "lpips_vgg": LearnedPerceptualImagePatchSimilarity(net_type="vgg", normalize=True),
         "clip_iqa": CLIPImageQualityAssessment(data_range=1.0, prompts=("quality",)),
         "clipiqa": pyiqa.create_metric("clipiqa", device=device),
@@ -122,6 +125,9 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
 
                 row = {"method": method, "image": sr_path.name}
                 for name, metric in metrics.items():
+                    if name == "msssim_rgb" and min(sr_ref.shape[-2:]) < MS_SSIM_MIN_SIZE:
+                        row[name] = float("nan")
+                        continue
                     if name != "clipiqa":
                         metric.reset()  # Independent TorchMetrics scores for each image.
                     score = metric(sr) if name in ("clip_iqa", "clipiqa") else metric(sr_ref, gt_ref)
@@ -143,7 +149,8 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
     write_csv(output_dir / "summary.csv", summary)
     visualize(comparisons, lq_dir or gt_dir.parent / "lq", gt_dir,
               output_dir / "visualizations", runs)
-    print("\nMethod | N | PSNR up | SSIM up | LPIPS down | CLIP-IQA (TorchMetrics) up | CLIPIQA (PyIQA) up")
+    print("\nMethod | N | PSNR up | SSIM up | MS-SSIM up | LPIPS down | "
+          "CLIP-IQA (TorchMetrics) up | CLIPIQA (PyIQA) up")
     for row in summary:
         print(f"{row['method']} | {row['num_images']} | " + " | ".join(
             f"{row[name]:.6f}" for name in SCORES

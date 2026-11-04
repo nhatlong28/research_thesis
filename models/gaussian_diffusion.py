@@ -257,8 +257,7 @@ class GaussianDiffusion:
         self, model, x_t, y, y_hat, un, t,
         clip_denoised=True,
         denoised_fn=None,
-        model_kwargs=None,
-        dc_params=None,
+        model_kwargs=None
     ):
         """
         Apply the model to get p(x_{t-1} | x_t, y, y_hat), as well as a prediction of
@@ -276,7 +275,6 @@ class GaussianDiffusion:
             clip_denoised.
         :param model_kwargs: if not None, a dict of extra keyword arguments to
             pass to the model. This can be used for conditioning.
-        :param dc_params: constant-rho DC parameters, separate from model conditioning.
         :return: a dict with the following keys:
                  - 'mean': the model mean output.
                  - 'variance': the model variance output.
@@ -289,17 +287,7 @@ class GaussianDiffusion:
         B, C = x_t.shape[:2]
         assert t.shape == (B,)
 
-        # 1. Predict RGB HR in the model's [-1,1] scale.
-        model_output = model(self._scale_input(x_t, un, t), t, **model_kwargs)
-
-        # 2. Apply DC to the HR prediction before packing its pixels.
-        if dc_params is not None:
-            if self.model_mean_type != ModelMeanType.START_X:
-                raise ValueError('DC requires predict_type=xstart')
-            model_output = sr.data_consistency(model_output, **dc_params)
-
-        # 3. PixelUnshuffle for the original UPSR reverse transition.
-        model_output = self.encode_first_stage(model_output)
+        model_output = self.encode_first_stage(model(self._scale_input(x_t, un, t), t, **model_kwargs))
 
         model_variance = _extract_into_tensor(self.posterior_variance, t, x_t.shape) * (un ** 2)
         model_log_variance = _extract_into_tensor(self.posterior_log_variance_clipped, t, x_t.shape) + 2 * torch.log(un)
@@ -629,7 +617,6 @@ class GaussianDiffusion:
         denoised_fn=None,
         model_kwargs=None,
         ddim_eta=0.0,
-        dc_params=None,
     ):
         """
         Sample x_{t-1} from the model using DDIM.
@@ -646,7 +633,6 @@ class GaussianDiffusion:
             clip_denoised=clip_denoised,
             denoised_fn=denoised_fn,
             model_kwargs=model_kwargs,
-            dc_params=dc_params,
         )
         pred_xstart = out["pred_xstart"]
         etas = _extract_into_tensor(self.etas, t, x.shape)
@@ -771,11 +757,14 @@ class GaussianDiffusion:
                     denoised_fn=denoised_fn,
                     model_kwargs=model_kwargs,
                     ddim_eta=ddim_eta,
-                    dc_params=dc_params,
                 )
                 if one_step:
                     out["sample"] = out["pred_xstart"]
-                    yield out
-                    break
+                if dc_params is not None:
+                    sample_rgb = nn.PixelShuffle(self.sf)(out["sample"])
+                    sample_dc = sr.data_consistency(sample_rgb, **dc_params)
+                    out["sample"] = self.encode_first_stage(sample_dc)
                 yield out
+                if one_step:
+                    break
                 x_sample = out["sample"]
