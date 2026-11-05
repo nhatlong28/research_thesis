@@ -103,10 +103,13 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
         for method, files in runs.items():
             rows, used_gt = [], set()
             for sr_path in files:
-                # Prefer exact names; otherwise match a GT stem inside the SR stem.
+                # Prefer exact names, then the longest GT stem inside the SR stem.
                 matches = [p for p in gt_files if p.stem == sr_path.stem]
                 if not matches:
                     matches = [p for p in gt_files if p.stem in sr_path.stem]
+                    if matches:
+                        longest = max(len(p.stem) for p in matches)
+                        matches = [p for p in matches if len(p.stem) == longest]
                 if len(matches) != 1:
                     raise ValueError(f"{method}/{sr_path.name}: expected one matching GT")
                 gt_path = matches[0]
@@ -160,15 +163,20 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--gt-dir", type=Path, default=Path("benchmark/testsets/BSDS10/gt"))
-    parser.add_argument("--lq-dir", type=Path, help="LR folder; default: sibling lq of gt-dir")
-    parser.add_argument("--results-dir", type=Path, default=Path("benchmark/results"))
-    parser.add_argument("--output-dir", type=Path, default=Path("benchmark/metrics"))
+    parser.add_argument("--dataset", default="BSDS10", help="Dataset folder name")
     parser.add_argument("--crop-border", type=int, default=4)
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
-    evaluate(args.gt_dir, args.results_dir, args.output_dir,
-             args.crop_border, args.device, args.lq_dir)
+    benchmark = Path("benchmark")
+    data_dir = benchmark / "testsets" / args.dataset
+    evaluate(
+        data_dir / "gt",
+        benchmark / "results" / args.dataset,
+        benchmark / "metrics" / args.dataset,
+        border=args.crop_border,
+        device=args.device,
+        lq_dir=data_dir / "lq",
+    )
 
 
 if __name__ == "__main__":

@@ -49,7 +49,10 @@ class UPSRRealModel(SRModel):
 
         # DiffPIR data consistency (inference only, constant rho).
         self.dc_opt = self.opt.get('dc', {})
+        self.noise_alpha = float(self.dc_opt.get('noise_alpha', 1.0))
         if self.dc_opt.get('enabled', False):
+            if not math.isfinite(self.noise_alpha) or self.noise_alpha < 0:
+                raise ValueError('dc.noise_alpha must be finite and nonnegative')
             self.rho = float(self.dc_opt.get('rho', 1.0))
             if not math.isfinite(self.rho) or self.rho <= 0:
                 raise ValueError('dc.rho must be finite and positive')
@@ -338,6 +341,7 @@ class UPSRRealModel(SRModel):
                 progress=False,
                 one_step=self.opt['diffusion'].get('one_step', False),
                 dc_params=dc_params,
+                noise_alpha=self.noise_alpha,
                 )    
 
         if flag_pad:

@@ -653,8 +653,9 @@ class GaussianDiffusion:
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
+
         sample = mean_pred + nonzero_mask * sigma * noise
-        return {"sample": sample, "pred_xstart": out["pred_xstart"]}
+        return {"sample": sample, "pred_xstart": out["pred_xstart"], "mean":mean_pred}
 
     def ddim_sample_loop(
         self,
@@ -672,6 +673,7 @@ class GaussianDiffusion:
         ddim_eta=0.0,
         one_step=False,
         dc_params=None,
+        noise_alpha=1.0,
     ):
         """
         Generate samples from the model using DDIM.
@@ -693,6 +695,7 @@ class GaussianDiffusion:
             ddim_eta=ddim_eta,
             one_step=one_step,
             dc_params=dc_params,
+            noise_alpha=noise_alpha,
         ):
             final = sample["sample"]
         return nn.PixelShuffle(self.sf)(final)
@@ -712,6 +715,7 @@ class GaussianDiffusion:
         ddim_eta=0.0,
         one_step=False,
         dc_params=None,
+        noise_alpha=1.0,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -761,9 +765,11 @@ class GaussianDiffusion:
                 if one_step:
                     out["sample"] = out["pred_xstart"]
                 if dc_params is not None:
+                    noise_term = torch.zeros_like(out["sample"]) if one_step else out["sample"] - out["mean"]
                     sample_rgb = nn.PixelShuffle(self.sf)(out["sample"])
                     sample_dc = sr.data_consistency(sample_rgb, **dc_params)
-                    out["sample"] = self.encode_first_stage(sample_dc)
+                    sample_dc_encoded = self.encode_first_stage(sample_dc)
+                    out["sample"] = sample_dc_encoded + noise_term * noise_alpha
                 yield out
                 if one_step:
                     break
