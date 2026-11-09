@@ -1,11 +1,9 @@
 papers/
 datasets/
 diffpir_method/
+benchmark/
 .venv/
 __pycache__/
-lamb1.0_zeta0.1_original
-generate_synthetic.py
-gaussian_diffusion_old.py
-PLAN.md
-README_DC.md
-
+.frontend-slides/
+*.html
+gaussian_diffusion_dc.py

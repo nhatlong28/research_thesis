@@ -1,4 +1,4 @@
-"""Evaluate SR folders with PSNR, SSIM, MS-SSIM, LPIPS-VGG and TorchMetrics/PyIQA CLIP-IQA."""
+"""Evaluate SR folders with full-reference and no-reference image quality metrics."""
 
 import argparse
 import csv
@@ -19,7 +19,16 @@ from torchmetrics.image import (
 from torchmetrics.multimodal import CLIPImageQualityAssessment
 
 
-SCORES = ("psnr_rgb", "ssim_rgb", "msssim_rgb", "lpips_vgg", "clip_iqa", "clipiqa")
+SCORES = (
+    "psnr_rgb", "psnr_y", "ssim_rgb", "msssim_rgb", "lpips_vgg",
+    "clip_iqa", "clipiqa",
+    "musiq", "topiq_nr", "niqe",
+)
+PYIQA_METRICS = {
+    "clipiqa": "clipiqa", "musiq": "musiq",
+    "topiq_nr": "topiq_nr", "niqe": "niqe",
+}
+REFERENCE_METRICS = {"psnr_rgb", "psnr_y", "ssim_rgb", "msssim_rgb", "lpips_vgg"}
 MS_SSIM_MIN_SIZE = 176  # TorchMetrics default: five scales and an 11-pixel kernel.
 
 
@@ -29,6 +38,12 @@ def read_rgb(path, device):
     return torch.from_numpy(pixels).permute(2, 0, 1).unsqueeze(0).to(
         device=device, dtype=torch.float32
     ) / 255.0
+
+
+def rgb_to_y(image):
+    """BT.601 YCbCr luminance for RGB [0, 1], without rounding."""
+    weights = image.new_tensor([65.481, 128.553, 24.966]).view(1, 3, 1, 1)
+    return ((image * weights).sum(dim=1, keepdim=True) + 16.0) / 255.0
 
 
 def write_csv(path, rows):
@@ -88,12 +103,15 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
     print(f"Device: {device}; reference crop: {border}; RGB [0, 1]")
     metrics = {
         "psnr_rgb": PeakSignalNoiseRatio(data_range=1.0),
+        "psnr_y": PeakSignalNoiseRatio(data_range=1.0),
         "ssim_rgb": StructuralSimilarityIndexMeasure(data_range=1.0),
         "msssim_rgb": MultiScaleStructuralSimilarityIndexMeasure(data_range=1.0),
         "lpips_vgg": LearnedPerceptualImagePatchSimilarity(net_type="vgg", normalize=True),
         "clip_iqa": CLIPImageQualityAssessment(data_range=1.0, prompts=("quality",)),
-        "clipiqa": pyiqa.create_metric("clipiqa", device=device),
     }
+    metrics.update({name: pyiqa.create_metric(model, device=device)
+                    for name, model in PYIQA_METRICS.items()})
+    metrics = {name: metrics[name] for name in SCORES}
     for metric in metrics.values():
         metric.to(device).eval()
 
@@ -131,9 +149,12 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
                     if name == "msssim_rgb" and min(sr_ref.shape[-2:]) < MS_SSIM_MIN_SIZE:
                         row[name] = float("nan")
                         continue
-                    if name != "clipiqa":
+                    if name not in PYIQA_METRICS:
                         metric.reset()  # Independent TorchMetrics scores for each image.
-                    score = metric(sr) if name in ("clip_iqa", "clipiqa") else metric(sr_ref, gt_ref)
+                    if name == "psnr_y":
+                        score = metric(rgb_to_y(sr_ref), rgb_to_y(gt_ref))
+                    else:
+                        score = metric(sr_ref, gt_ref) if name in REFERENCE_METRICS else metric(sr)
                     row[name] = score.item()
                 rows.append(row)
                 print(f"{method}/{sr_path.name}: " + ", ".join(
@@ -152,8 +173,10 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
     write_csv(output_dir / "summary.csv", summary)
     visualize(comparisons, lq_dir or gt_dir.parent / "lq", gt_dir,
               output_dir / "visualizations", runs)
-    print("\nMethod | N | PSNR up | SSIM up | MS-SSIM up | LPIPS down | "
-          "CLIP-IQA (TorchMetrics) up | CLIPIQA (PyIQA) up")
+    print("\nMethod | N | " + " | ".join(
+        f"{name} {'down' if name in ('lpips_vgg', 'niqe') else 'up'}"
+        for name in SCORES
+    ))
     for row in summary:
         print(f"{row['method']} | {row['num_images']} | " + " | ".join(
             f"{row[name]:.6f}" for name in SCORES

@@ -339,9 +339,11 @@ class UPSRRealModel(SRModel):
                 denoised_fn=None,
                 model_kwargs=model_kwargs,
                 progress=False,
+                ddim_eta=self.opt['diffusion'].get('ddim_eta', 0.0),
                 one_step=self.opt['diffusion'].get('one_step', False),
                 dc_params=dc_params,
                 noise_alpha=self.noise_alpha,
+                noise_alpha_schedule=self.dc_opt.get('noise_alpha_schedule'),
                 )    
 
         if flag_pad:

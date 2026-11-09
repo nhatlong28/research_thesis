@@ -619,9 +619,10 @@ class GaussianDiffusion:
         ddim_eta=0.0,
     ):
         """
-        Sample x_{t-1} from the model using DDIM.
+        Compute a DDIM mean and return posterior-scaled noise separately.
 
-        Same usage as p_sample().
+        ddim_eta is retained for call compatibility; noise_alpha in the loop
+        controls the noise amplitude for this variant.
         """
         out = self.p_mean_variance(
             model=model,
@@ -638,7 +639,7 @@ class GaussianDiffusion:
         etas = _extract_into_tensor(self.etas, t, x.shape)
         etas_prev = _extract_into_tensor(self.etas_prev, t, x.shape)
         alpha = _extract_into_tensor(self.alpha, t, x.shape)
-        sigma = ddim_eta * self.kappa * torch.sqrt(etas_prev / etas) * torch.sqrt(alpha)
+        # sigma = ddim_eta * self.kappa * torch.sqrt(etas_prev / etas) * torch.sqrt(alpha)
 
         m_t = torch.sqrt(etas_prev / etas)
 
@@ -654,8 +655,8 @@ class GaussianDiffusion:
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
 
-        sample = mean_pred + nonzero_mask * sigma * noise
-        return {"sample": sample, "pred_xstart": out["pred_xstart"], "mean":mean_pred}
+        noise_term = nonzero_mask * torch.exp(0.5 * out["log_variance"]) * noise
+        return {"sample": mean_pred, "pred_xstart": out["pred_xstart"], "noise": noise_term}
 
     def ddim_sample_loop(
         self,
@@ -674,6 +675,7 @@ class GaussianDiffusion:
         one_step=False,
         dc_params=None,
         noise_alpha=1.0,
+        noise_alpha_schedule=None,
     ):
         """
         Generate samples from the model using DDIM.
@@ -696,6 +698,7 @@ class GaussianDiffusion:
             one_step=one_step,
             dc_params=dc_params,
             noise_alpha=noise_alpha,
+            noise_alpha_schedule=noise_alpha_schedule,
         ):
             final = sample["sample"]
         return nn.PixelShuffle(self.sf)(final)
@@ -716,6 +719,7 @@ class GaussianDiffusion:
         one_step=False,
         dc_params=None,
         noise_alpha=1.0,
+        noise_alpha_schedule=None,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -723,6 +727,13 @@ class GaussianDiffusion:
 
         Same usage as p_sample_loop_progressive().
         """
+        # Schedule entries follow sampling order: first step to last step.
+        if dc_params is not None and noise_alpha_schedule is not None:
+            noise_alpha_schedule = [float(value) for value in noise_alpha_schedule]
+            if len(noise_alpha_schedule) != self.num_timesteps:
+                raise ValueError('noise_alpha_schedule must contain one value per sampling step')
+            if any(not np.isfinite(value) or value < 0 for value in noise_alpha_schedule):
+                raise ValueError('noise_alpha_schedule values must be finite and nonnegative')
         if device is None:
             device = next(model.parameters()).device
 
@@ -765,11 +776,16 @@ class GaussianDiffusion:
                 if one_step:
                     out["sample"] = out["pred_xstart"]
                 if dc_params is not None:
-                    noise_term = torch.zeros_like(out["sample"]) if one_step else out["sample"] - out["mean"]
                     sample_rgb = nn.PixelShuffle(self.sf)(out["sample"])
                     sample_dc = sr.data_consistency(sample_rgb, **dc_params)
                     sample_dc_encoded = self.encode_first_stage(sample_dc)
-                    out["sample"] = sample_dc_encoded + noise_term * noise_alpha
+                    noise_term = torch.zeros_like(out["noise"]) if one_step else out["noise"]
+                    # i counts down, so convert it to the chronological step index.
+                    alpha = (noise_alpha_schedule[self.num_timesteps - 1 - i]
+                             if noise_alpha_schedule is not None else noise_alpha)
+                    out["sample"] = sample_dc_encoded + noise_term * alpha
+                elif not one_step:
+                    out["sample"] = out["sample"] + out["noise"]
                 yield out
                 if one_step:
                     break

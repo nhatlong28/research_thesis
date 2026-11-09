@@ -11,7 +11,8 @@ queue_size: 160
 dc:
   enabled: true
   rho: 0.4
-  noise_alpha: 1.0
+  noise_alpha: 0.0
+  noise_alpha_schedule: null  # Optional per-step alphas in sampling order; overrides noise_alpha.
   kernel_path: benchmark/testsets/BSDS10/gaussian_kernel.npy
 
 # dataset and data loader settings
@@ -84,6 +85,7 @@ network_g:
     num_feat: 128
 
 diffusion:
+  ddim_eta: 0.0
   un: 0.1
   min_noise: 0.4
   target: models.script_util.create_gaussian_diffusion
@@ -94,7 +96,7 @@ diffusion:
       power: 0.2
     etas_end: 0.99
     steps: 5
-    min_noise_level: 0.2
+    min_noise_level: 0.45
     kappa: 2.0
     weighted_mse: False
     predict_type: xstart
