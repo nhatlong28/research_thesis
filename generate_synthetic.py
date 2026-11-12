@@ -32,13 +32,17 @@ def gaussian_kernel():
 
 
 def classical_degradation(x, k, sf=4):
-    """Circular blur per channel, then phase-zero decimation; no noise here.
+    ''' blur + downsampling
 
-    Pass a floating-point HWC image in [0, 1] to avoid uint8 convolution
-    quantization. ndimage.convolve is the current spelling of DiffPIR's
-    ndimage.filters.convolve.
-    """
-    x = ndimage.convolve(x, np.expand_dims(k, axis=2), mode="wrap")
+    Args:
+        x: HxWxC image, [0, 1]/[0, 255]
+        k: hxw, double
+        sf: down-scale factor
+
+    Return:
+        downsampled LR image
+    '''
+    x = ndimage.convolve(x, np.expand_dims(k, axis=2), mode='wrap')
     st = 0
     return x[st::sf, st::sf, ...]
 

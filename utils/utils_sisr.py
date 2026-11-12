@@ -2,14 +2,12 @@ import torch
 
 
 def splits(a, sf):
-    '''Split the frequency tensor into sf x sf distinct blocks.
-
+    '''split a into sfxsf distinct blocks
     Args:
-        a: NxCxHxW frequency tensor; H and W must be divisible by sf.
-        sf: integer scale factor.
-
+        a: NxCxHxW
+        sf: split factor
     Returns:
-        b: NxCx(H/sf)x(W/sf)x(sf^2) tensor of grouped frequency blocks.
+        b: NxCx(H/sf)x(W/sf)x(sf^2)
     '''
     b = torch.stack(torch.chunk(a, sf, dim=2), dim=4)
     b = torch.cat(torch.chunk(b, sf, dim=3), dim=4)
@@ -17,17 +15,14 @@ def splits(a, sf):
 
 
 def p2o(psf, shape):
-    '''Convert a centered point-spread function to an optical transfer function.
-
-    Zero-pad the PSF, shift its center to the origin, and take its FFT.
-    This represents circular convolution on the requested spatial grid.
-
+    '''
+    Convert point-spread function to optical transfer function.
+    Zero-pad the PSF and correct its center before computing the FFT.
     Args:
-        psf: NxCxhxw centered spatial blur kernel.
-        shape: target spatial size (H, W).
-
+        psf: NxCxhxw
+        shape: [H, W]
     Returns:
-        otf: complex NxCxHxW frequency response.
+        otf: NxCxHxW, complex tensor
     '''
     otf = torch.zeros(psf.shape[:-2] + shape).type_as(psf)
     otf[..., :psf.shape[2], :psf.shape[3]].copy_(psf)
@@ -37,14 +32,9 @@ def p2o(psf, shape):
 
 
 def upsample(x, sf):
-    '''Upsample by inserting zeros, the adjoint of phase-zero decimation.
-
-    Args:
-        x: NxCxHxW LR tensor.
-        sf: integer scale factor.
-
-    Returns:
-        z: NxCx(H*sf)x(W*sf) tensor, with x at indices [::sf, ::sf].
+    '''s-fold upsampler
+    Upsampling the spatial size by filling the new entries with zeros
+    x: tensor image, NxCxHxW
     '''
     z = torch.zeros((x.shape[0], x.shape[1], x.shape[2] * sf, x.shape[3] * sf)).type_as(x)
     z[..., ::sf, ::sf].copy_(x)
@@ -52,19 +42,15 @@ def upsample(x, sf):
 
 
 def pre_calculate(y, k, sf):
-    '''Precompute kernel and measurement terms reused by the DC iterations.
-
+    '''
     Args:
-        y: NxCxHxW observed LR tensor on the [0,1] scale.
-        k: centered blur kernel, typically 1x1xhxw, shared across RGB/batch.
-        sf: integer scale factor.
+        y: NxCxHxW, LR input, [0, 1]
+        k: NxCxhxw
+        sf: integer
 
     Returns:
-        FB: FFT of the kernel on the HR grid.
-        FBC: complex conjugate of FB.
-        F2B: squared magnitude of FB.
-        FBFy: FFT of the adjoint-blurred, zero-inserted LR measurement.
-        These tensors are reused at every sampling timestep.
+        FB, FBC, F2B, FBFy
+        will be reused during iterations
     '''
     h, w = y.shape[-2:]
     FB = p2o(k, (h * sf, w * sf))
@@ -75,20 +61,15 @@ def pre_calculate(y, k, sf):
 
 
 def data_solution(x0, FB, FBC, F2B, FBFy, rho, sf):
-    '''Solve the quadratic super-resolution data subproblem using FFT.
-
-    Minimize ||y - S(k*x)||^2 + rho * ||x - x0||^2, where convolution
-    is circular and S keeps indices [::sf, ::sf]. Both norms use sums.
-
+    '''FFT solution of ||y - H(x)||^2 + rho * ||x - x0||^2
     Args:
-        x0: NxCxHxW clean HR prediction on the [0,1] scale.
-        FB, FBC, F2B, FBFy: frequency terms returned by pre_calculate().
-        rho: positive regularization weight, constant across timesteps here.
-        sf: integer scale factor.
+        x0: NxCxHxW, HR input, [0, 1]
+        FB, FBC, F2B, FBFy: from pre_calculate
+        rho: positive scalar or Nx1x1x1 DC weight
+        sf: integer
 
     Returns:
-        HR solution with the same shape as x0. The unconstrained solution
-        is not clipped and may contain values outside [0,1].
+        NxCxHxW, HR solution without clipping
     '''
     FR = FBFy + torch.fft.fftn(rho * x0, dim=(-2, -1))
     FBR = torch.mean(splits(FB * FR, sf), dim=-1)
@@ -99,17 +80,15 @@ def data_solution(x0, FB, FBC, F2B, FBFy, rho, sf):
 
 
 def data_consistency(x0, FB, FBC, F2B, FBFy, rho, sf):
-    '''Apply DiffPIR Step 4 to a UPSR prediction before PixelUnshuffle.
-
+    '''data consistency with range conversion
     Args:
-        x0: Nx3xHxW RGB HR prediction in the model's [-1,1] scale.
-        FB, FBC, F2B, FBFy: precomputed terms from LR y on the [0,1] scale.
-        rho: positive constant DC weight.
-        sf: integer scale factor.
+        x0: Nx3xHxW, HR input, [-1, 1]
+        FB, FBC, F2B, FBFy: from LR input in [0, 1]
+        rho: positive scalar or Nx1x1x1 DC weight
+        sf: integer
 
     Returns:
-        Corrected RGB HR prediction in the model's scale, with no clipping.
-        FFT calculations use float32 inputs with autocast disabled.
+        Nx3xHxW, corrected HR image in model scale, without clipping
     '''
     with torch.autocast(device_type=x0.device.type, enabled=False):
         x0 = x0.float() * 0.5 + 0.5

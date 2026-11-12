@@ -675,7 +675,6 @@ class GaussianDiffusion:
         one_step=False,
         dc_params=None,
         noise_alpha=1.0,
-        noise_alpha_schedule=None,
     ):
         """
         Generate samples from the model using DDIM.
@@ -698,7 +697,6 @@ class GaussianDiffusion:
             one_step=one_step,
             dc_params=dc_params,
             noise_alpha=noise_alpha,
-            noise_alpha_schedule=noise_alpha_schedule,
         ):
             final = sample["sample"]
         return nn.PixelShuffle(self.sf)(final)
@@ -719,7 +717,6 @@ class GaussianDiffusion:
         one_step=False,
         dc_params=None,
         noise_alpha=1.0,
-        noise_alpha_schedule=None,
     ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
@@ -727,13 +724,6 @@ class GaussianDiffusion:
 
         Same usage as p_sample_loop_progressive().
         """
-        # Schedule entries follow sampling order: first step to last step.
-        if dc_params is not None and noise_alpha_schedule is not None:
-            noise_alpha_schedule = [float(value) for value in noise_alpha_schedule]
-            if len(noise_alpha_schedule) != self.num_timesteps:
-                raise ValueError('noise_alpha_schedule must contain one value per sampling step')
-            if any(not np.isfinite(value) or value < 0 for value in noise_alpha_schedule):
-                raise ValueError('noise_alpha_schedule values must be finite and nonnegative')
         if device is None:
             device = next(model.parameters()).device
 
@@ -780,10 +770,7 @@ class GaussianDiffusion:
                     sample_dc = sr.data_consistency(sample_rgb, **dc_params)
                     sample_dc_encoded = self.encode_first_stage(sample_dc)
                     noise_term = torch.zeros_like(out["noise"]) if one_step else out["noise"]
-                    # i counts down, so convert it to the chronological step index.
-                    alpha = (noise_alpha_schedule[self.num_timesteps - 1 - i]
-                             if noise_alpha_schedule is not None else noise_alpha)
-                    out["sample"] = sample_dc_encoded + noise_term * alpha
+                    out["sample"] = sample_dc_encoded + noise_term * noise_alpha
                 elif not one_step:
                     out["sample"] = out["sample"] + out["noise"]
                 yield out

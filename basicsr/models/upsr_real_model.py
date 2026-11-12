@@ -13,7 +13,6 @@ import tqdm
 import torchvision
 import torch.nn.functional as F
 from torchvision.transforms.functional import normalize
-import matplotlib.pyplot as plt
 
 
 # from basicsr.utils.registry import MODEL_REGISTRY
@@ -47,7 +46,7 @@ class UPSRRealModel(SRModel):
 
         self.sf = self.opt['scale']
 
-        # DiffPIR data consistency (inference only, constant rho).
+        # DiffPIR data consistency (inference only).
         self.dc_opt = self.opt.get('dc', {})
         self.noise_alpha = float(self.dc_opt.get('noise_alpha', 1.0))
         if self.dc_opt.get('enabled', False):
@@ -339,11 +338,9 @@ class UPSRRealModel(SRModel):
                 denoised_fn=None,
                 model_kwargs=model_kwargs,
                 progress=False,
-                ddim_eta=self.opt['diffusion'].get('ddim_eta', 0.0),
                 one_step=self.opt['diffusion'].get('one_step', False),
                 dc_params=dc_params,
                 noise_alpha=self.noise_alpha,
-                noise_alpha_schedule=self.dc_opt.get('noise_alpha_schedule'),
                 )    
 
         if flag_pad:

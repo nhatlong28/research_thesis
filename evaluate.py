@@ -1,4 +1,4 @@
-"""Evaluate SR folders with full-reference and no-reference image quality metrics."""
+"""Evaluate super-resolution images with PyIQA metrics."""
 
 import argparse
 import csv
@@ -10,26 +10,22 @@ import matplotlib.pyplot as plt
 import pyiqa
 from PIL import Image
 import torch
-from torchmetrics.image import (
-    LearnedPerceptualImagePatchSimilarity,
-    MultiScaleStructuralSimilarityIndexMeasure,
-    PeakSignalNoiseRatio,
-    StructuralSimilarityIndexMeasure,
-)
-from torchmetrics.multimodal import CLIPImageQualityAssessment
 
 
-SCORES = (
-    "psnr_rgb", "psnr_y", "ssim_rgb", "msssim_rgb", "lpips_vgg",
-    "clip_iqa", "clipiqa",
-    "musiq", "topiq_nr", "niqe",
-)
 PYIQA_METRICS = {
-    "clipiqa": "clipiqa", "musiq": "musiq",
-    "topiq_nr": "topiq_nr", "niqe": "niqe",
+    "psnr_rgb": ("psnr", {"test_y_channel": False}),
+    "psnr_y": ("psnr", {"test_y_channel": True}),
+    "ssim_rgb": ("ssim", {"test_y_channel": False, "downsample": False}),
+    "msssim_rgb": ("ms_ssim", {"test_y_channel": False, "downsample": False}),
+    "lpips_vgg": ("lpips-vgg", {}),
+    "clipiqa": ("clipiqa", {}),
+    "musiq": ("musiq", {}),
+    "topiq_nr": ("topiq_nr", {}),
+    "niqe": ("niqe", {}),
 }
+SCORES = tuple(PYIQA_METRICS)
 REFERENCE_METRICS = {"psnr_rgb", "psnr_y", "ssim_rgb", "msssim_rgb", "lpips_vgg"}
-MS_SSIM_MIN_SIZE = 176  # TorchMetrics default: five scales and an 11-pixel kernel.
+MS_SSIM_MIN_SIZE = 161  # Four ceil-halving steps must leave at least 11 pixels.
 
 
 def read_rgb(path, device):
@@ -40,37 +36,37 @@ def read_rgb(path, device):
     ) / 255.0
 
 
-def rgb_to_y(image):
-    """BT.601 YCbCr luminance for RGB [0, 1], without rounding."""
-    weights = image.new_tensor([65.481, 128.553, 24.966]).view(1, 3, 1, 1)
-    return ((image * weights).sum(dim=1, keepdim=True) + 16.0) / 255.0
-
-
 def write_csv(path, rows):
     with path.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=list(rows[0]))
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(
+            {key: f"{value:.4f}" if isinstance(value, float) else value
+             for key, value in row.items()}
+            for row in rows
+        )
 
 
 def visualize(comparisons, lq_dir, gt_dir, output_dir, methods):
-    """Save one comparison figure per image: LR, GT, then each method's SR."""
+    """Show the LR input, HR reference, and SR results side by side."""
+    methods = list(methods)
     lq_files = {p.stem: p for p in lq_dir.iterdir() if p.is_file()}
     gt_files = {p.stem: p for p in gt_dir.iterdir() if p.is_file()}
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, sr_paths in comparisons.items():
         fig, axes = plt.subplots(1, len(methods) + 2,
-                                 figsize=(4 * (len(methods) + 2), 4), squeeze=False)
+                                 figsize=(4 * (len(methods) + 2), 4))
         try:
             panels = [("LR (LQ)", lq_files[name]), ("HR (GT)", gt_files[name])]
             panels += [(f"{method} (SR)", sr_paths.get(method)) for method in methods]
-            for ax, (label, path) in zip(axes[0], panels):
+            for ax, (label, path) in zip(axes, panels):
                 ax.axis("off")
                 if path is None:
                     ax.set_title(f"{label}\nNo result")
                     continue
                 with Image.open(path) as image:
-                    ax.imshow(image.convert("RGB"), interpolation="nearest")
+                    pixels = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
+                    ax.imshow(pixels, interpolation="nearest")
                     ax.set_title(f"{label}\n{image.width} x {image.height}")
             fig.suptitle(name)
             fig.tight_layout()
@@ -84,6 +80,7 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
     if border < 0:
         raise ValueError("crop-border must be nonnegative")
     gt_files = sorted(p for p in gt_dir.iterdir() if p.is_file())
+    lq_dir = lq_dir or gt_dir.parent / "lq"
 
     # Each image folder is one method/run; keep nested sweep runs separate.
     runs = {}
@@ -102,24 +99,17 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
         device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}; reference crop: {border}; RGB [0, 1]")
     metrics = {
-        "psnr_rgb": PeakSignalNoiseRatio(data_range=1.0),
-        "psnr_y": PeakSignalNoiseRatio(data_range=1.0),
-        "ssim_rgb": StructuralSimilarityIndexMeasure(data_range=1.0),
-        "msssim_rgb": MultiScaleStructuralSimilarityIndexMeasure(data_range=1.0),
-        "lpips_vgg": LearnedPerceptualImagePatchSimilarity(net_type="vgg", normalize=True),
-        "clip_iqa": CLIPImageQualityAssessment(data_range=1.0, prompts=("quality",)),
+        name: pyiqa.create_metric(model, device=device, **options)
+        for name, (model, options) in PYIQA_METRICS.items()
     }
-    metrics.update({name: pyiqa.create_metric(model, device=device)
-                    for name, model in PYIQA_METRICS.items()})
-    metrics = {name: metrics[name] for name in SCORES}
-    for metric in metrics.values():
-        metric.to(device).eval()
 
-    per_image, summary = [], []
+    per_image = []
+    summary = []
     comparisons = {}
     with torch.inference_mode():
         for method, files in runs.items():
-            rows, used_gt = [], set()
+            rows = []
+            used_gt = set()
             for sr_path in files:
                 # Prefer exact names, then the longest GT stem inside the SR stem.
                 matches = [p for p in gt_files if p.stem == sr_path.stem]
@@ -143,18 +133,12 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
                     raise ValueError(f"{method}/{sr_path.name}: cropped image too small")
                 sr_ref = sr[..., border:-border, border:-border] if border else sr
                 gt_ref = gt[..., border:-border, border:-border] if border else gt
-
                 row = {"method": method, "image": sr_path.name}
                 for name, metric in metrics.items():
                     if name == "msssim_rgb" and min(sr_ref.shape[-2:]) < MS_SSIM_MIN_SIZE:
                         row[name] = float("nan")
                         continue
-                    if name not in PYIQA_METRICS:
-                        metric.reset()  # Independent TorchMetrics scores for each image.
-                    if name == "psnr_y":
-                        score = metric(rgb_to_y(sr_ref), rgb_to_y(gt_ref))
-                    else:
-                        score = metric(sr_ref, gt_ref) if name in REFERENCE_METRICS else metric(sr)
+                    score = metric(sr_ref, gt_ref) if name in REFERENCE_METRICS else metric(sr)
                     row[name] = score.item()
                 rows.append(row)
                 print(f"{method}/{sr_path.name}: " + ", ".join(
@@ -171,7 +155,7 @@ def evaluate(gt_dir, results_dir, output_dir, border=4, device="auto", lq_dir=No
     output_dir.mkdir(parents=True, exist_ok=True)
     write_csv(output_dir / "per_image.csv", per_image)
     write_csv(output_dir / "summary.csv", summary)
-    visualize(comparisons, lq_dir or gt_dir.parent / "lq", gt_dir,
+    visualize(comparisons, lq_dir, gt_dir,
               output_dir / "visualizations", runs)
     print("\nMethod | N | " + " | ".join(
         f"{name} {'down' if name in ('lpips_vgg', 'niqe') else 'up'}"
