@@ -2,8 +2,10 @@
 
 import argparse
 import csv
+import re
 from pathlib import Path
 from statistics import fmean
+from textwrap import fill
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -50,26 +52,34 @@ def write_csv(path, rows):
 def visualize(comparisons, lq_dir, gt_dir, output_dir, methods):
     """Show the LR input, HR reference, and SR results side by side."""
     methods = list(methods)
+    method_titles = {}
+    for method in methods:
+        lines = re.split(r"_(?=(?:noise_alpha|min_noise_level|min_noise|rho|kappa)_)", method)
+        lines[0] += " (SR)"
+        method_titles[method] = "\n".join(fill(line, width=28, break_on_hyphens=False) for line in lines)
+    extra_lines = max((title.count("\n") for title in method_titles.values()), default=0)
     lq_files = {p.stem: p for p in lq_dir.iterdir() if p.is_file()}
     gt_files = {p.stem: p for p in gt_dir.iterdir() if p.is_file()}
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, sr_paths in comparisons.items():
-        fig, axes = plt.subplots(1, len(methods) + 2,
-                                 figsize=(4 * (len(methods) + 2), 4))
+        fig, axes = plt.subplots(
+            1, len(methods) + 2,
+            figsize=(4 * (len(methods) + 2), 4 + 0.2 * extra_lines),
+            constrained_layout=True,
+        )
         try:
             panels = [("LR (LQ)", lq_files[name]), ("HR (GT)", gt_files[name])]
-            panels += [(f"{method} (SR)", sr_paths.get(method)) for method in methods]
+            panels += [(method_titles[method], sr_paths.get(method)) for method in methods]
             for ax, (label, path) in zip(axes, panels):
                 ax.axis("off")
                 if path is None:
-                    ax.set_title(f"{label}\nNo result")
+                    ax.set_title(f"{label}\nNo result", fontsize=10)
                     continue
                 with Image.open(path) as image:
                     pixels = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
                     ax.imshow(pixels, interpolation="nearest")
-                    ax.set_title(f"{label}\n{image.width} x {image.height}")
+                    ax.set_title(f"{label}\n{image.width} x {image.height}", fontsize=10)
             fig.suptitle(name)
-            fig.tight_layout()
             fig.savefig(output_dir / f"{name}.png", dpi=150)
         finally:
             plt.close(fig)
